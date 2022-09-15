@@ -1,5 +1,6 @@
 import numpy as np
-from aaa import AAAReductor
+
+from paaa import pAAAReductor
 
 
 def H(s, p):
@@ -11,5 +12,5 @@ S0, S1 = np.meshgrid(S[0], S[1], indexing='ij')
 
 Phi = H(S0, S1)
 
-aaa = AAAReductor(data=(S, Phi))
-rom = aaa.reduce(tol=1e-8)
+paaa = pAAAReductor(data=(S, Phi))
+rom = paaa.reduce(tol=1e-12)

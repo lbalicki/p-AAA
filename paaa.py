@@ -4,11 +4,14 @@ import itertools
 from pymor.core.base import BasicObject
 from pymor.core.logger import getLogger
 from pymor.models.transfer_function import TransferFunction
-from pymor.parameters.base import Mu
 
 
-class AAAReductor(BasicObject):
-    """AAA reductor.
+class pAAAReductor(BasicObject):
+    """Reductor implementing the parametric AAA algorithm.
+
+    The reductor implements the parametric AAA algorithm and can be used either with
+    data or a given full-order model which has a `transfer_function` attribute. MIMO
+    data is accepted.
 
     Parameters
     ----------
@@ -21,38 +24,65 @@ class AAAReductor(BasicObject):
         MIMO case `S[i,j,k]` represents a matrix of dimension `dim_input` times `dim_output`.
         If `fom` is not `None` data only contains a list of sampling values.
     fom
-        |TransferFunction| or |Model| with a `transfer_function` attribute,
-        with a `eval_tf`.
+        |TransferFunction| or |Model| with a `transfer_function` attribute.
     conjugate
         Wether to compute complex conjugates of first variables and enforce interpolation in
-        complex conjugate pairs (allwos for constructing real system matrices).
+        complex conjugate pairs (allows for constructing real system matrices).
+    nsp_conv
+        If `true`, converge algorithm if dimension of nullspace of Loewner matrix
+        is numerically greater than 1.
+    nsp_tol
+        Tolerance for null space of higher-dimensional Loewner matrix to check for
+        interpolation or convergence.
     post_process
         Wether to do post-processing or not.
-    nsp_tol
-        Tolerance for null space of higher-dimensional Loewner matrix to check for interpolation.
     L_rk_tol
         Tolerance for ranks of 1-D Loewner matrices computed in post-processing.
     mu
         |Parameter values|.
     """
-
-    def __init__(self, data=None, fom=None, conjugate=True, post_process=True, nsp_tol=1e-14, L_rk_tol=1e-8):
+    def __init__(self, data, fom=None, conjugate=True, nsp_conv=True, nsp_tol=1e-14, post_process=True, L_rk_tol=1e-8):
         assert data is not None or fom is not None
         if fom is not None:
-            raise NotImplementedError
+            assert isinstance(fom, TransferFunction) or hasattr(fom, 'transfer_function')
+            if not isinstance(fom, TransferFunction):
+                fom = fom.transfer_function
+            self.num_vars = 1 + len(fom.parameters)
+
+            assert len(data) == self.num_vars
+            self.sampling_values = data
+            self.parameters = fom.parameters
+            sampling_grid = np.meshgrid(*(sv for sv in data), indexing='ij')
+            if fom.dim_input == 1 and fom.dim_output == 1:
+                self.samples = np.empty([*(len(sv) for sv in data)])
+                for idc in itertools.product(*(range(ss) for ss in self.samples.shape)):
+                    params = {}
+                    for i, p in enumerate(fom.parameters.keys()):
+                        params[p] = sampling_grid[i+1][idc]
+                    self.samples[idc] = fom.eval_tf(sampling_grid[0][idc], mu=params)
+            else:
+                sample_shape = [*(len(sv) for sv in data)]
+                sample_shape.append(fom.dim_output)
+                sample_shape.append(fom.dim_input)
+                self.samples = np.empty(sample_shape)
+                for idc in itertools.product(*(range(ss) for ss in self.samples.shape[:-2])):
+                    params = {}
+                    for i, p in enumerate(fom.parameters.keys()):
+                        params[p] = sampling_grid[i+1][idc]
+                    self.samples[idc] = fom.eval_tf(sampling_grid[0][idc], mu=params)
         else:
             assert len(data) == 2
             self.sampling_values = data[0]
             self.samples = data[1]
             self.num_vars = len(data[0])
+            self.parameters = {}
+            for i in range(self.num_vars):
+                self.parameters['p' + str(i)] = 1
 
         self.__auto_init(locals())
 
     def reduce(self, tol=1e-3, max_iters=None):
         logger = getLogger('pymor.reductors.AAA.reduce')
-
-        err = np.inf
-        self.itpl_part = [*([] for _ in range(self.num_vars))]
 
         svs = self.sampling_values
         samples = self.samples
@@ -79,8 +109,8 @@ class AAAReductor(BasicObject):
             v = np.random.uniform(size=(dim_output, 1))
             w = w / np.linalg.norm(w)
             v = v / np.linalg.norm(v)
-            for l in list(itertools.product(*(range(s) for s in samples.shape[:-2]))):
-                samples_T[l] = w @ samples[l] @ v
+            for li in list(itertools.product(*(range(s) for s in samples.shape[:-2]))):
+                samples_T[li] = w @ samples[li] @ v
             samples_orig = samples
             samples = samples_T
         else:
@@ -156,22 +186,22 @@ class AAAReductor(BasicObject):
                     logger.warning('Non-minimal order interpolant computed.')
 
             # update barycentric form
-            itpl_samples = samples[np.ix_(*(l for l in itpl_part))]
+            itpl_samples = samples[np.ix_(*(ip for ip in itpl_part))]
             itpl_samples = np.reshape(itpl_samples, -1)
             itpl_nodes = [*(sv[lp] for sv, lp in zip(svs, itpl_part))]
             bary_func = np.vectorize(make_bary_func(itpl_nodes, itpl_samples, coefs))
 
-            if d_nsp >= 1:
+            if self.nsp_conv and d_nsp >= 1:
+                logger.info('Converged due to non-trivial null space of Loewner matrix.')
                 break
 
         # in MIMO case construct barycentric form based on matrix/vector samples
         if dim_input != 1 or dim_output != 1:
-            itpl_samples = samples_orig[np.ix_(*(l for l in itpl_part))]
+            itpl_samples = samples_orig[np.ix_(*(ip for ip in itpl_part))]
             itpl_samples = np.reshape(itpl_samples, (-1, dim_input, dim_output))
-            bary_func = np.vectorize(make_bary_func(itpl_nodes, itpl_samples, coefs, dim_input, dim_output),
-                                     signature='(),()->('+str(dim_input)+','+str(dim_output)+')')
+            bary_func = make_bary_func(itpl_nodes, itpl_samples, coefs, dim_input, dim_output)
 
-        return TransferFunction(dim_input, dim_output, bary_func)
+        return TransferFunction(dim_input, dim_output, lambda s, mu: bary_func(s, *(mu[p] for p in self.parameters)), parameters=self.parameters)
 
 
 def nd_loewner(samples, svs, itpl_part):
