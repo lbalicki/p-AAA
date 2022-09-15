@@ -38,8 +38,6 @@ class pAAAReductor(BasicObject):
         Wether to do post-processing or not.
     L_rk_tol
         Tolerance for ranks of 1-D Loewner matrices computed in post-processing.
-    mu
-        |Parameter values|.
     """
     def __init__(self, data, fom=None, conjugate=True, nsp_conv=True, nsp_tol=1e-14, post_process=True, L_rk_tol=1e-8):
         assert data is not None or fom is not None
