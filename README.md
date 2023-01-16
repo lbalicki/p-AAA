@@ -1,5 +1,7 @@
 # p-AAA
 
+The most up-to-date implementation of the algorithm is now part of the [pyMOR](https://github.com/pymor/pymor) repository ([pAAA implementation](https://github.com/pymor/pymor/blob/main/src/pymor/reductors/aaa.py)) and includes bug-fixes as well as other improvements.
+
 This repository contains an implementation of the parametric AAA (p-AAA) algorithm from:
 <br /> <br />
 The p-AAA algorithm for data driven modeling of parametric dynamical systems <br />
